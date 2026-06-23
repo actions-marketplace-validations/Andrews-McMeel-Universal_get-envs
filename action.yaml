@@ -53,7 +53,7 @@ runs:
 
     - name: Login via Az module
       if: steps.cache-envs.outputs.cache-hit != 'true' || (steps.cache-envs.outputs.cache-hit == 'true' && contains(inputs.contentTypes, 'BuildArg'))
-      uses: azure/login@v2
+      uses: azure/login@v3
       with:
         creds: "${{ inputs.azurecredentials }}"
 
