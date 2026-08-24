@@ -395,3 +395,6 @@ outputs:
   buildArguments:
     value: ${{ steps.get-envs.outputs.buildArguments || steps.get-build-args-cached.outputs.buildArguments }}
     description: "List of build arguments retrieved from key vault"
+  keyVaultName:
+    value: ${{ steps.check-kv-input.outputs.keyVaultName || steps.kv-name.outputs.keyVaultName }}
+    description: "The name of the key vault used to retrieve secrets"
