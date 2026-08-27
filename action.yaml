@@ -45,7 +45,7 @@ runs:
     - name: Cache environment variables
       id: cache-envs
       if: ${{ inputs.enableCaching == 'true' }}
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: |
           ${{ github.workspace }}/.env.gpg
@@ -53,7 +53,7 @@ runs:
 
     - name: Login via Az module
       if: steps.cache-envs.outputs.cache-hit != 'true' || (steps.cache-envs.outputs.cache-hit == 'true' && contains(inputs.contentTypes, 'BuildArg'))
-      uses: azure/login@v2
+      uses: azure/login@v3
       with:
         creds: "${{ inputs.azurecredentials }}"
 
@@ -125,6 +125,50 @@ runs:
             exit 1
         fi
 
+    - name: Mask confidential secrets
+      shell: bash
+      run: |
+        # Retrieve build arguments on cache hit
+        set -euo pipefail
+
+        KEYVAULT_NAME="${{ steps.kv-name.outputs.keyVaultName }}"
+
+        # Set secrets list
+        # shellcheck disable=SC2207
+        mapfile -t RAW_SECRETS < <(az keyvault secret list --vault-name "${KEYVAULT_NAME}" --query "[].name" --output tsv)
+        SECRETS=()
+        for SECRET in "${RAW_SECRETS[@]}"; do
+          CLEAN_SECRET=$(echo "${SECRET}" | tr -d '\r' | xargs)
+          SECRETS+=("${CLEAN_SECRET}")
+        done
+
+        # Remove duplicates
+        SECRET_LIST=()
+        for SECRET in "${SECRETS[@]}"; do
+          # shellcheck disable=SC2076
+          if ! [[ " ${SECRET_LIST[*]} " =~ " ${SECRET} " ]]; then
+            SECRET_LIST+=("${SECRET}")
+          fi
+        done
+        SECRETS=("${SECRET_LIST[@]}")
+        if echo "${SECRETS[*]}" | grep -E "\w" > /dev/null; then
+            for SECRET in "${SECRETS[@]}"; do
+                # Convert to upper case snake case and remove quotes
+                SECRET_NAME=$(echo "${SECRET}" | tr -d '"' | tr '[:lower:]-' '[:upper:]_')
+
+                # Retrieve all properties of the secret
+
+                # Get secret value
+                SECRET_VALUE=$(az keyvault secret show --vault-name "${KEYVAULT_NAME}" -n "${SECRET}" --output tsv --query "value")
+
+                # Mask secret value in logs
+                if [[ "$SECRET_NAME" =~ (SECRET|TOKEN|KEY|PASS|CONSTR|AZUREBLOBSTORAGE|CONNECTIONSTRING|CONNECTION_STRING|PAT) ]]; then
+                    echo "Masking secret value for secret: ${SECRET_NAME}"
+                    echo "::add-mask::$SECRET_VALUE"
+                fi
+            done
+        fi
+
     - name: Pull secrets from Key Vault
       if: steps.cache-envs.outputs.cache-hit != 'true'
       id: get-envs
@@ -172,6 +216,7 @@ runs:
         BUILD_ARGUMENTS=""
         ENVIRONMENT_VARIABLES=""
         echo "Retrieving secrets for key vault: ${KEYVAULT_NAME}"
+        touch ".env"
         if echo "${SECRETS[*]}" | grep -E "\w" > /dev/null; then
             for SECRET in "${SECRETS[@]}"; do
                 # Convert to upper case snake case and remove quotes
@@ -182,11 +227,6 @@ runs:
 
                 # Get secret value
                 SECRET_VALUE=$(az keyvault secret show --vault-name "${KEYVAULT_NAME}" -n "${SECRET}" --output tsv --query "value")
-
-                # Mask secret value in logs
-                if [[ "$SECRET_NAME" =~ (SECRET|TOKEN|KEY|PASS|CONSTR|AZUREBLOBSTORAGE|CONNECTIONSTRING|CONNECTION_STRING) ]]; then
-                    echo "::add-mask::$SECRET_VALUE"
-                fi
 
                 # Get secret content type
                 SECRET_CONTENT_TYPE=$(az keyvault secret show --vault-name "${KEYVAULT_NAME}" -n "${SECRET}" --output tsv --query "contentType")
@@ -317,11 +357,6 @@ runs:
                 # Get secret value
                 SECRET_VALUE=$(az keyvault secret show --vault-name "${KEYVAULT_NAME}" -n "${SECRET}" --output tsv --query "value")
 
-                # Mask secret value in logs
-                if [[ "$SECRET_NAME" =~ (SECRET|TOKEN|KEY|PASS|CONSTR|AZUREBLOBSTORAGE|CONNECTIONSTRING|CONNECTION_STRING) ]]; then
-                    echo "::add-mask::$SECRET_VALUE"
-                fi
-
                 # Get secret content type
                 SECRET_CONTENT_TYPE=$(az keyvault secret show --vault-name "${KEYVAULT_NAME}" -n "${SECRET}" --output tsv --query "contentType")
 
@@ -360,3 +395,6 @@ outputs:
   buildArguments:
     value: ${{ steps.get-envs.outputs.buildArguments || steps.get-build-args-cached.outputs.buildArguments }}
     description: "List of build arguments retrieved from key vault"
+  keyVaultName:
+    value: ${{ steps.check-kv-input.outputs.keyVaultName || steps.kv-name.outputs.keyVaultName }}
+    description: "The name of the key vault used to retrieve secrets"
